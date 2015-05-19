@@ -1,5 +1,5 @@
 language: haskell
-ghc: 4.6
+ghc: 4.8
 install:
   - "cabal install --only-dependencies"
 script:
