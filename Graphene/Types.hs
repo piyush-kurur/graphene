@@ -1,7 +1,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE TypeSynonymInstances  #-}
+{-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE FlexibleInstances     #-}
-{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE UndecidableInstances  #-}
 
 module Graphene.Types
        ( Drawable(..)
@@ -9,11 +9,13 @@ module Graphene.Types
 
 import Diagrams.Prelude
 import Diagrams.TwoD.Text
+import Data.Typeable
 
 class Drawable backend a where
-  draw :: a -> Diagram backend R2
-
-instance Drawable backend (Diagram backend R2) where
+  draw :: a -> Diagram backend 
+  
+instance Diagram backend ~ dbac => Drawable backend dbac where
   draw = id
-instance Renderable Text backend => Drawable backend String where
+instance (Renderable (Text (N b)) b,V b~V2,Typeable (N b),RealFloat (N b))
+    => Drawable b String where
   draw = text
