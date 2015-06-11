@@ -10,7 +10,6 @@ import Data.Graph.Inductive.Graph
 import Data.Maybe
 import Data.List
 
-import Control.Applicative
 import Control.Monad.Primitive
 import Control.Monad.ST
 import Control.Monad
@@ -23,10 +22,9 @@ import Diagrams.TwoD.Size()
 
 -- position and force type forcetype
 type PositionVector s   = M.MVector (PrimState (ST s)) (V2 Double)
-type ForceVector s      = M.MVector (PrimState (ST s)) (V2 Double)
 
 -- to get initial random positions
-rndNPoints :: Int   --size of random list
+rndNPoints :: Int   --size of random 
            -> [V2 Double] 
 rndNPoints n = zipWith (curry r2) (randL 0) (randL 1)
         where
@@ -59,70 +57,59 @@ nodesPos :: ( DynGraph gr
          -> V.Vector (V2 Double)
 nodesPos graph n = runST $ do
         pos     <- V.thaw pos1
-        force   <- V.thaw for1
-        updatePos graph n pos force
+        forM_ [1..n] $ \_ -> iterate1 pos (iterFun graph)
         V.freeze pos
         where
             pos1    = V.fromList (rndNPoints (noNodes  graph))
-            for1    = V.fromList (nPos (noNodes  graph))
-            nPos n1  = replicate n1 (r2 (0.0,0.0))
 
--- update position for n number of times
-updatePos :: ( PrimMonad (ST s) 
-             , DynGraph gr
-             , V y~ V2
-             , Enveloped y
-             , N y ~ Double
-             )
-          => gr y c  --input graph 
-          -> Int 
-          -> PositionVector s --Mutable vector containing positions of nodes 
-          -> ForceVector s --Mutable vector containing force applied at every node  
-          -> ST s ()
-updatePos _ 0 _ _               = return ()
-updatePos inGraph n pos force   = do 
-    forceAtN inGraph pos force
-    forM_ (nodes inGraph) $ \i -> do
-      v <- M.read force (i-1)
-      M.write pos   (i-1) v
-      M.write force (i-1) (r2 (0.0,0.0))
-    updatePos inGraph (n-1) pos force
+iterate1 :: (PrimMonad (ST s))
+            => PositionVector s
+            -> (V.Vector (V2 Double) -> Int -> V2 Double)
+            -> ST s ()
+iterate1 pos iter = 
+    forM_ [0 .. M.length pos - 1] $ \i -> do
+        posV    <- V.unsafeFreeze pos
+        prePos  <- M.read pos i
+        M.write pos i (prePos + 0.1 * (iter posV i))
 
--- update force at every node in single iteration
-forceAtN :: ( DynGraph gr
-            , PrimMonad (ST s)
-            , V y~ V2
-            , Enveloped y
-            , N y ~ Double
-            ) 
-         => gr y c  --input graph 
-         -> PositionVector s --Mutable vector containing positions of nodes 
-         -> ForceVector s --Mutable vector containing force applied at every node 
-         -> ST s ()
-forceAtN g pos force = forM_ [1 .. noNodes g] $
-  \ n ->
-    do forM_ (neighbors g n) $ 
-        \ i -> 
-           attForce pos force n i (dynK g n i)
-       forM_ (nodes g \\ (neighbors g n ++ [n])) $
-         \ j ->
-           repForce pos force j n (dynK g n j)
-
---calculate attractive force at a node        
-attForce :: ( PrimMonad (ST s)
+iterFun :: (DynGraph gr
+            , V a ~ V2
+            , Enveloped a
+            , N a ~ Double
             )
-         => PositionVector s --Mutable vector containing positions of nodes 
-         -> ForceVector s --Mutable vector containing force applied at every node 
-         -> Int
-         -> Int
-         -> Double
-         -> ST s ()
-attForce pos force n1 n2 dynDis = do
-  forcePre <- M.read force (n1-1)
-  affected <- calforceAttr dynDis <$> M.read pos (n1-1) <*> M.read pos (n2-1)
-  M.write force (n1-1) (affected + forcePre)
+            => gr a b
+            -> V.Vector (V2 Double)
+            -> Int
+            -> V2 Double
+iterFun graph pos l = totalF
+    where
+        totalF  = foldr (+) (r2 (0.0,0.0)) (attr ++ repul)
+        attr    = map (cal calforceAttr) neighb
+        repul   = map (cal calForceRep) nonNb
+        nonNb   = nodes graph \\ (neighb ++ [l+1])
+        neighb  = neighbors graph (l+1)
+        cal f x = f (dynK graph (l+1) x) (pos V.! l) (pos V.! (x-1))
 
--- attractive force between two nodes
+-- dynamic separation between two nodes
+dynK :: ( DynGraph gr
+        , V a ~ V2
+        , Enveloped a
+        , N a ~ Double
+        )
+     => gr a c 
+     -> Int
+     -> Int
+     -> Double
+dynK g s t = max minK 2
+    where
+        v1      = fromJust (lab g s)
+        v2      = fromJust (lab g t)
+        minK    = (l1/2) + (l2/2) + 4
+        l1      = diag v1
+        l2      = diag v2
+        diag v = sqrt (width v * width v + height v * height v)
+
+--attractive force between two nodes
 calforceAttr :: Double 
              -> V2 Double
              -> V2 Double
@@ -134,21 +121,7 @@ calforceAttr dynDis pos1 pos2 = result
     effect  = -1*(2*log d)
     result  = (effect/d)*^(pos1-pos2)
 
---calculate repulsive force on a node
-repForce :: ( PrimMonad (ST s)
-            )
-         => PositionVector s --Mutable vector containing positions of nodes 
-         -> ForceVector s --Mutable vector containing force applied at every node 
-         -> Int    
-         -> Int
-         -> Double
-         -> ST s ()
-repForce pos force n1 n2 dynDis = do
-  forcePre <- M.read force (n1-1)
-  affected <- calForceRep dynDis <$> M.read pos (n1-1) <*> M.read pos (n2-1)
-  M.write force (n1-1) (affected + forcePre)
-
--- repulsive force between two nodes
+--repulsive force between two nodes
 calForceRep :: Double
             -> V2 Double
             -> V2 Double
@@ -159,23 +132,3 @@ calForceRep dynDis pos1 pos2 = result
     d       = if dist /= 0 then dist else dynDis
     effect  = 1/sqrt d
     result  = (effect/d)*^(pos1-pos2)
-
--- function to calculate dynamic length of spring depending on node sizes
--- here fixed natural length of spring is 5
-dynK :: ( DynGraph gr
-        , V a ~ V2
-        , Enveloped a
-        , N a ~ Double
-        )
-     => gr a c 
-     -> Int
-     -> Int
-     -> Double
-dynK g s t = max minK 5
-    where
-        v1      = fromJust (lab g s)
-        v2      = fromJust (lab g t)
-        minK    = (l1/2) + (l2/2) + 4
-        l1      = diag v1
-        l2      = diag v2
-        diag v = sqrt (width v * width v + height v * height v)
